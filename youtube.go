@@ -1,11 +1,13 @@
 package youtube
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -21,12 +23,25 @@ func SetLogOutput(w io.Writer) {
 
 //NewYoutube :Initialize youtube package object
 func NewYoutube(debug bool) *Youtube {
-	return &Youtube{DebugMode: debug, DownloadPercent: make(chan int64, 100)}
+	return &Youtube{
+		client: &http.Client{
+			Transport: &http.Transport{
+				DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+					conn, err := net.Dial(network, addr)
+					fmt.Printf("Remote IP: %s\n", conn.RemoteAddr())
+					return conn, err
+				},
+			},
+		},
+		DebugMode:       debug,
+		DownloadPercent: make(chan int64, 100),
+	}
 }
 
 type stream map[string]string
 
 type Youtube struct {
+	client            *http.Client
 	DebugMode         bool
 	StreamList        []stream
 	VideoID           string
@@ -61,6 +76,7 @@ func (y *Youtube) DecodeURL(url string) error {
 func (y *Youtube) StartDownload(destFile string) error {
 	//download highest resolution on [0]
 	err := errors.New("Empty stream list")
+	y.log(fmt.Sprintln("Download StreamList=", y.StreamList))
 	for _, v := range y.StreamList {
 		url := v["url"]
 		y.log(fmt.Sprintln("Download url=", url))
@@ -153,7 +169,7 @@ func (y *Youtube) parseVideoInfo() error {
 func (y *Youtube) getVideoInfo() error {
 	url := "http://youtube.com/get_video_info?video_id=" + y.VideoID
 	y.log(fmt.Sprintf("url: %s", url))
-	resp, err := http.Get(url)
+	resp, err := y.client.Get(url)
 	if err != nil {
 		return err
 	}
@@ -206,7 +222,7 @@ func (y *Youtube) Write(p []byte) (n int, err error) {
 	return
 }
 func (y *Youtube) videoDLWorker(destFile string, target string) error {
-	resp, err := http.Get(target)
+	resp, err := y.client.Get(target)
 	if err != nil {
 		y.log(fmt.Sprintf("Http.Get\nerror: %s\ntarget: %s\n", err, target))
 		return err
